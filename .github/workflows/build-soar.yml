@@ -1,1 +1,60 @@
+name: Build libsoar.so
 
+# Builds the Soar DNS-tunnel client (tools/soar-client) as static Linux executables named
+# libsoar.so, the same way libvaydns.so / libslipstream.so are shipped in app/src/main/jniLibs.
+#
+# Run it from the Actions tab (Run workflow), then download the "soar-jniLibs" artifact and copy
+# its two folders into app/src/main/jniLibs/.
+
+on:
+  workflow_dispatch:
+    inputs:
+      go_version:
+        description: "Go version (1.26.1 is the one known to work with the other engines in this app)"
+        default: "1.26.1"
+  push:
+    paths:
+      - "tools/soar-client/**"
+      - ".github/workflows/build-soar.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ github.event.inputs.go_version || '1.26.1' }}
+          cache: false
+
+      - name: Resolve dependencies
+        working-directory: tools/soar-client
+        env:
+          # Fail loudly if Soar needs a newer Go than the one chosen above, instead of silently
+          # switching to another toolchain.
+          GOTOOLCHAIN: local
+        run: |
+          go version
+          go mod tidy
+          go vet ./...
+
+      - name: Build arm64-v8a and armeabi-v7a
+        working-directory: tools/soar-client
+        env:
+          GOTOOLCHAIN: local
+          CGO_ENABLED: "0"
+          GOOS: linux
+        run: |
+          mkdir -p ../../out/jniLibs/arm64-v8a ../../out/jniLibs/armeabi-v7a
+          GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o ../../out/jniLibs/arm64-v8a/libsoar.so .
+          GOARCH=arm GOARM=7 go build -trimpath -ldflags "-s -w" -o ../../out/jniLibs/armeabi-v7a/libsoar.so .
+          file ../../out/jniLibs/*/libsoar.so
+          sha256sum ../../out/jniLibs/*/libsoar.so
+          ls -l ../../out/jniLibs/*/libsoar.so
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: soar-jniLibs
+          path: out/jniLibs
+          if-no-files-found: error
